@@ -681,7 +681,7 @@ cd $PBS_O_WORKDIR
         """Start n engines by profile or profile_dir."""
         resources = "#PBS -l select=1:ncpus=%d" % self.cores
         if self.mem:
-            resources += ";mem=%smb" % int(float(self.mem) * 1024)
+            resources += ":mem=%smb" % int(float(self.mem) * 1024)
         self.context["resources"] = resources
         self.context["cores"] = self.cores
         self.context["tag"] = self.tag if self.tag else "bcbio"
