@@ -670,8 +670,7 @@ class BcbioPBSPROEngineSetLauncher(PBSPROLauncher, launcher.BatchClusterAppMixin
     default_template = Unicode(u"""#!/bin/sh
 #PBS -V
 #PBS -N {tag}-e
-#PBS -l select=1:ncpus={cores}
-{mem}
+{resources}
 {array_cmd}
 cd $PBS_O_WORKDIR
 %s %s --profile-dir="{profile_dir}" --cluster-id="{cluster_id}"
@@ -680,10 +679,10 @@ cd $PBS_O_WORKDIR
 
     def start(self, n):
         """Start n engines by profile or profile_dir."""
+        resources = "#PBS -l select=1:ncpus=%d" % self.cores
         if self.mem:
-            self.context["mem"] = "#PBS -l mem=%smb" % int(float(self.mem) * 1024)
-        else:
-            self.context["mem"] = ""
+            resources += ";mem=%smb" % int(float(self.mem) * 1024)
+        self.context["resources"] = resources
         self.context["cores"] = self.cores
         self.context["tag"] = self.tag if self.tag else "bcbio"
         self.context["array_cmd"] = "" if n == 1 else "#PBS -J 1-%i" % n
