@@ -25,6 +25,7 @@ from IPython.utils.path import locate_profile
 from IPython.utils import pickleutil
 from IPython.utils import traitlets
 from IPython.utils.traitlets import (List, Unicode, CRegExp)
+from IPython.core.profiledir import ProfileDir
 
 from slurm import get_slurm_attributes
 import utils
