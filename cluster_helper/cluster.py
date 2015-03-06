@@ -21,7 +21,7 @@ import sys
 from IPython.parallel import Client
 from IPython.parallel.apps import launcher
 from IPython.parallel import error as iperror
-from IPython.utils.path import locate_profile
+from IPython.utils.path import locate_profile, get_ipython_dir
 from IPython.utils import pickleutil
 from IPython.utils import traitlets
 from IPython.utils.traitlets import (List, Unicode, CRegExp)
@@ -502,7 +502,10 @@ class BcbioSLURMControllerLauncher(SLURMLauncher, launcher.BatchClusterAppMixin)
         self.context["account"] = self.account
         self.context["timelimit"] = self.timelimit
         self.context["cores"] = self.cores
-        self.context["mem"] = "#SBATCH --mem=%d" % (2 * DEFAULT_MEM_PER_CPU)
+        if self.mem:
+            self.context["mem"] = "#SBATCH --mem=%s" % int(float(self.mem) * 1024.0)
+        else:
+            self.context["mem"] = "#SBATCH --mem=%d" % (4 * DEFAULT_MEM_PER_CPU)
         self.context["tag"] = self.tag if self.tag else "bcbio"
         self.context["account"] = ("#SBATCH -A %s" % self.account if self.account else "")
         self.context["resources"] = "\n".join(["#SBATCH --%s" % r.strip()
@@ -731,6 +734,7 @@ def _scheduler_resources(scheduler, params, queue):
     Pulls out hacks to work in different environments:
       - mincores -- Require a minimum number of cores when submitting jobs
                     to avoid single core jobs on constrained queues
+      - conmem -- Memory (in Gb) for the controller to use
     """
     orig_resources = copy.deepcopy(params.get("resources", []))
     specials = {}
@@ -740,7 +744,7 @@ def _scheduler_resources(scheduler, params, queue):
         orig_resources = orig_resources.split(";")
     resources = []
     for r in orig_resources:
-        if r.startswith(("mincores=", "minconcores=")):
+        if r.startswith(("mincores=", "minconcores=", "conmem=")):
             name, val = r.split("=")
             specials[name] = int(val)
         else:
@@ -804,7 +808,7 @@ def _start(scheduler, profile, queue, num_jobs, cores_per_job, cluster_id,
          "--%s.resources='%s'" % (controller_class, resources),
          "--%s.resources='%s'" % (engine_class, resources),
          "--%s.mem='%s'" % (engine_class, extra_params.get("mem", "")),
-         "--%s.mem='%s'" % (controller_class, extra_params.get("mem", "")),
+         "--%s.mem='%s'" % (controller_class, specials.get("conmem", "")),
          "--%s.tag='%s'" % (engine_class, extra_params.get("tag", "")),
          "--%s.tag='%s'" % (controller_class, extra_params.get("tag", "")),
          "--IPClusterStart.controller_launcher_class=%s.%s" % (ns, controller_class),
@@ -874,6 +878,7 @@ def cluster_view(scheduler, queue, num_jobs, cores_per_job=1, profile=None,
     max_delay = start_wait * 60
     delay = 5 if extra_params.get("run_local") else 30
     max_tries = 10
+    _create_base_ipython_dirs()
     if profile is None:
         has_throwaway = True
         profile = create_throwaway_profile()
@@ -918,7 +923,45 @@ def cluster_view(scheduler, queue, num_jobs, cores_per_job=1, profile=None,
             time.sleep(delay)
             slept += delay
             if slept > max_delay:
-                raise IOError("Cluster startup timed out.")
+                raise IOError("""
+
+    The cluster startup timed out. This could be for a couple of reasons. The
+    most common reason is that the queue you are submitting jobs to is
+    oversubscribed. You can check if this is what is happening by trying again,
+    and watching to see if jobs are in a pending state or a running state when
+    the startup times out. If they are in the pending state, that means we just
+    need to wait longer for them to start, which you can specify by passing
+    the --timeout parameter, in minutes.
+
+    The second reason is that there is a problem with the controller and engine
+    jobs being submitted to the scheduler. In the directory you ran from,
+    you should see files that are named YourScheduler_enginesABunchOfNumbers and
+    YourScheduler_controllerABunchOfNumbers. If you submit one of those files
+    manually to your scheduler (for example bsub < YourScheduler_controllerABunchOfNumbers)
+    You will get a more helpful error message that might help you figure out what
+    is going wrong.
+
+    The third reason is that you need to submit your bcbio_nextgen.py job itself as a job;
+    bcbio-nextgen needs to run on a compute node, not the login node. So the
+    command you use to run bcbio-nextgen should be submitted as a job to
+    the scheduler. You can diagnose this because the controller and engine
+    jobs will be in the running state, but the cluster will still timeout.
+
+    Finally, it may be an issue with how the cluster is configured-- the controller
+    and engine jobs are unable to talk to each other. They need to be able to open
+    ports on the machines each of them are running on in order to work. You
+    can diagnose this as the possible issue by if you have submitted the bcbio-nextgen
+    job to the scheduler, the bcbio-nextgen main job and the controller and
+    engine jobs are all in a running state and the cluster still times out. This will
+    likely to be something that you'll have to talk to the administrators of the cluster
+    you are using about.
+
+    If you need help debugging, please post an issue here and we'll try to help you
+    with the detective work:
+
+    https://github.com/roryk/ipython-cluster-helper/issues
+
+                        """)
         client = Client(url_file, timeout=60)
         if direct:
             view = _get_direct_view(client, retries)
@@ -958,6 +1001,12 @@ def _get_balanced_blocked_view(client, retries):
     if retries:
         view.set_flags(retries=int(retries))
     return view
+
+def _create_base_ipython_dirs():
+    """Create default user directories to prevent potential race conditions downstream.
+    """
+    utils.safe_makedir(os.path.join(get_ipython_dir(), "db"))
+    utils.safe_makedir(os.path.join(locate_profile(), "db"))
 
 def _shutdown(client):
     print "Sending a shutdown signal to the controller and engines."
